@@ -6,11 +6,7 @@ A Franka Panda manipulation environment for **robot control, multimodal observat
 
 ![Franka grasps an apple, lifts it, places it in the open bin, and retracts](assets/pick_place_demo.gif)
 
-**Actual headless Isaac Sim footage · scripted differential IK · 3× playback.** The arm approaches the apple, closes its fingers, lifts it, moves above the bin, releases it, and retracts. The example checks that the apple settles fully inside the bin with the gripper open. Object poses are assigned at initialization; grasping and transport use simulated contact and the same action interface as keyboard teleoperation.
-
 [Demo script](pp_scripts/record_pick_place_demo.py) · [Validation report](assets/pick_place_demo_report.json) · [Reproduce this demo](#run-the-headless-demo)
-
-The recorded run contains **1,580 synchronized steps (52.7 simulation seconds)**; the apple was lifted **25 cm** and remained settled in the bin for **3 seconds** before the final check.
 
 This is a **single-apple example**, driven by known waypoints. The default collection task asks for **both the banana and the apple** to be placed in the bin. The GIF is not a trained-policy rollout or a keyboard demonstration.
 
