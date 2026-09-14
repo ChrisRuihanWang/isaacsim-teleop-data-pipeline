@@ -3,13 +3,18 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple, Any, Dict, List
+from typing import Optional, Tuple, Any, List
 
 import numpy as np
 from PIL import Image
 import tyro
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+try:
+    from .dataset_schema import ACTION_NAMES, STATE_NAMES, validate_episode
+except ImportError:
+    from dataset_schema import ACTION_NAMES, STATE_NAMES, validate_episode
 
 
 def _parse_resize_hw(s: str) -> Optional[Tuple[int, int]]:
@@ -32,8 +37,8 @@ class Args:
     root: Path = Path("data/lerobot")
 
     # Data meaning
-    fps: int = 30
-    task: str = "Pick the red cube and place it into the basket."
+    fps: int = 30  # Must match the recorded simulation rate.
+    task: str = "Place the banana and the apple into the open bin."
     robot_type: str = "sim_franka"
 
     # Images
@@ -44,7 +49,7 @@ class Args:
     overwrite: bool = False
 
     
-    write_info_meta: bool = False
+    write_info_meta: bool = False  # Rejected: info is not a declared LeRobot feature.
 
 
 def _require_keys(d: Any, keys: List[str], fname: str) -> None:
@@ -54,18 +59,7 @@ def _require_keys(d: Any, keys: List[str], fname: str) -> None:
 
 
 def _build_state_names(state_dim: int) -> List[str]:
-    joint_names = [
-        "panda_joint1", "panda_joint2", "panda_joint3", "panda_joint4",
-        "panda_joint5", "panda_joint6", "panda_joint7",
-        "panda_finger_joint1", "panda_finger_joint2",
-    ]
-    state_names = (
-        [f"qrel_{n}" for n in joint_names] +
-        [f"qdrel_{n}" for n in joint_names] +
-        ["grip_qrel_finger1", "grip_qrel_finger2"] +
-        ["grip_qdrel_finger1", "grip_qdrel_finger2"] +
-        ["grip_width"]
-    )
+    state_names = STATE_NAMES
     if state_dim != len(state_names):
         raise ValueError(
             f"state_dim={state_dim} but expected {len(state_names)}.\n"
@@ -79,6 +73,9 @@ def _raw_float_to_u8(img_raw: np.ndarray) -> np.ndarray:
     Convert your saved float raw (typically centered/normalized) -> uint8 RGB for LeRobot.
     Uses robust percentile stretch per-frame to avoid black/noise.
     """
+    # Local v1 recordings already contain RGB bytes; preserve their colors.
+    if img_raw.dtype == np.uint8:
+        return img_raw.copy()
     x = img_raw.astype(np.float32)
     x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -106,9 +103,33 @@ def main(args: Args) -> None:
         raise FileNotFoundError(f"npz_dir not found: {npz_dir}")
 
     resize_hw = _parse_resize_hw(args.resize_hw)
+    if args.fps <= 0 or (resize_hw is not None and min(resize_hw) <= 0):
+        raise ValueError("FPS and resize dimensions must be positive")
+    if args.write_info_meta:
+        raise ValueError("--args.write-info-meta is unsupported; metadata stays in the source NPZ")
 
     root_parent = args.root.expanduser().resolve()
     dataset_dir = (root_parent / args.repo_id).resolve()
+
+    if dataset_dir == root_parent or not dataset_dir.is_relative_to(root_parent):
+        raise ValueError("repo_id must name a dataset below --args.root")
+
+    # ---------- Scan episodes ----------
+    npz_files = sorted(npz_dir.glob("ep_*.npz"))
+    if len(npz_files) == 0:
+        raise RuntimeError(f"No ep_*.npz found in {npz_dir}")
+
+    # Validate every episode before creating the output; never silently truncate pairs.
+    reference = None
+    for path in npz_files:
+        with np.load(path, allow_pickle=False) as episode:
+            summary = validate_episode(episode, legacy_fps=args.fps)
+        if not np.isclose(summary["fps"], args.fps):
+            raise ValueError(f"{path.name}: recorded FPS differs from --args.fps")
+        signature = (summary["state_dimension"], summary["action_dimension"], summary["cameras"])
+        if reference is not None and signature != reference:
+            raise ValueError(f"{path.name}: inconsistent dimensions")
+        reference = signature
 
     if args.overwrite and dataset_dir.exists():
         print(f"[INFO] overwrite=True -> removing existing dataset: {dataset_dir}")
@@ -122,13 +143,8 @@ def main(args: Args) -> None:
             f"Delete it or pass --args.overwrite."
         )
 
-    # ---------- Scan episodes ----------
-    npz_files = sorted(npz_dir.glob("ep_*.npz"))
-    if len(npz_files) == 0:
-        raise RuntimeError(f"No ep_*.npz found in {npz_dir}")
-
     # ---------- Infer shapes ----------
-    sample = np.load(npz_files[0], allow_pickle=True)
+    sample = np.load(npz_files[0], allow_pickle=False)
     _require_keys(sample, ["state", "action", "rgb_raw", "wrist_rgb_raw",
                            "oblique_rgb_raw"], 
                   npz_files[0].name)
@@ -139,7 +155,7 @@ def main(args: Args) -> None:
     wrist0 = sample["wrist_rgb_raw"]      # (T,h,w,3) float32
     oblique0 = sample["oblique_rgb_raw"]
     
-    if state0.ndim != 2 or action0.ndim != 2 or rgb0.ndim != 4 or wrist0.ndim != 4:
+    if state0.ndim != 2 or action0.ndim != 2 or rgb0.ndim != 4 or wrist0.ndim != 4 or oblique0.ndim != 4:
         raise ValueError(
             f"Unexpected shapes:\n"
             f"  state {state0.shape}\n"
@@ -193,9 +209,11 @@ def main(args: Args) -> None:
         "action": {
             "dtype": "float32",
             "shape": (action_dim,),
-            "names": [f"a{i}" for i in range(action_dim)],
+            "names": ACTION_NAMES,
         },
     }
+
+    sample.close()
 
     dataset = LeRobotDataset.create(
         repo_id=args.repo_id,
@@ -214,7 +232,7 @@ def main(args: Args) -> None:
     print(f"[OK] overhead_raw={H_oh}x{W_oh} wrist_raw={H_wr}x{W_wr} oblique_raw={H_ob}x{W_ob} resize={resize_hw}")
 
     for ep_idx, f in enumerate(npz_files):
-        data = np.load(f, allow_pickle=True)
+        data = np.load(f, allow_pickle=False)
         _require_keys(data, ["state", "action", "rgb_raw", "wrist_rgb_raw",
                              "oblique_rgb_raw"], f.name)
 
@@ -223,17 +241,7 @@ def main(args: Args) -> None:
         rgb_raw = data["rgb_raw"]
         wrist_raw = data["wrist_rgb_raw"]
         oblique_raw = data["oblique_rgb_raw"]
-        T = min(len(state), len(action), len(rgb_raw), len(wrist_raw),len(oblique_raw))
-        if T < 5:
-            print(f"[WARN] Skip short episode {f.name}: T={T}")
-            continue
-
-        meta_payload: Optional[Dict[str, Any]] = None
-        if args.write_info_meta and "meta" in data:
-            try:
-                meta_payload = data["meta"][0] if isinstance(data["meta"], np.ndarray) else data["meta"]
-            except Exception:
-                meta_payload = None
+        T = len(state)
 
         for t in range(T):
             oh_u8 = _raw_float_to_u8(rgb_raw[t])
@@ -257,14 +265,16 @@ def main(args: Args) -> None:
                 "action": action[t],
                 "task": args.task,
             }
-            if meta_payload is not None:
-                frame["info"] = {"meta": meta_payload}
 
             dataset.add_frame(frame)
 
         dataset.save_episode()
+        data.close()
         print(f"[EP] {ep_idx:03d} saved: {f.name} (T={T})")
 
+    # LeRobot v3 writers need finalization; older releases flush in save_episode().
+    if hasattr(dataset, "finalize"):
+        dataset.finalize()
     print("\n[DONE] Conversion finished.")
     print("Load with:")
     print("  from pathlib import Path")

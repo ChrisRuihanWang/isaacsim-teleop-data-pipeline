@@ -30,9 +30,8 @@ docker/.container.cfg
 # IDE
 **/.idea/
 **/.vscode/
-# Don't ignore the top-level .vscode directory as it is
-# used to configure VS Code settings
-!.vscode
+# Local interpreter paths and virtual environments
+/.venv/
 
 # Outputs
 **/output/*
@@ -103,3 +102,7 @@ data/images/
 # 如果以后还有别的采集目录，也放在 data/ 下，可以统一忽略
 checkpoints/
 venv_lerobot/
+
+# Downloaded task assets are restored by pp_scripts/fetch_task_assets.py.
+/assets/fruits/
+/assets/containers/

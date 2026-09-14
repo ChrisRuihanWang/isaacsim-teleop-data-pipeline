@@ -1,0 +1,83 @@
+{
+  "sources": {
+    "banana_and_bin": "NVIDIA Isaac Sim 5.1 asset server; subject to NVIDIA asset terms.",
+    "apple": "Poly Haven Food Apple 01, Oliver Harries, CC0.",
+    "license_links": [
+      "https://docs.isaacsim.omniverse.nvidia.com/5.1.0/common/licenses.html",
+      "https://polyhaven.com/license"
+    ]
+  },
+  "files": [
+    {
+      "path": "assets/fruits/banana/011_banana.usd",
+      "url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/YCB/Axis_Aligned/011_banana.usd",
+      "size": 458028,
+      "sha256": "d4d1fa7af05967365cd538824ac68401111c574865a7fba7bc76d861f54f25dd"
+    },
+    {
+      "path": "assets/fruits/banana/Materials/Textures/011_banana_COLOR.png",
+      "url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/YCB/Axis_Aligned/Materials/Textures/011_banana_COLOR.png",
+      "size": 6096662,
+      "sha256": "841dd1e67d23815cfaac3a14019c4dd8712d956664dab853a4d558353eba3795"
+    },
+    {
+      "path": "assets/fruits/apple/food_apple_01_1k.usdc",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/usd/1k/food_apple_01/food_apple_01_1k.usdc",
+      "size": 499491,
+      "md5": "96b304955446a9dd899260f28d33c610"
+    },
+    {
+      "path": "assets/fruits/apple/textures/food_apple_01_diff_1k.jpg",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/food_apple_01/food_apple_01_diff_1k.jpg",
+      "size": 183791,
+      "md5": "3ddf2b8313f20c95f3e04fb057b32d7b"
+    },
+    {
+      "path": "assets/fruits/apple/textures/food_apple_01_nor_gl_1k.exr",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/exr/1k/food_apple_01/food_apple_01_nor_gl_1k.exr",
+      "size": 689397,
+      "md5": "4ff93d20b119f77ccfb00876bc9f4bca"
+    },
+    {
+      "path": "assets/fruits/apple/textures/food_apple_01_rough_1k.jpg",
+      "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/food_apple_01/food_apple_01_rough_1k.jpg",
+      "size": 53123,
+      "md5": "e46e242f52a3c2138a1e8c6ce0d82438"
+    },
+    {
+      "asset": "nvidia_klt",
+      "path": "assets/containers/nvidia_klt/Materials/Textures/FOF_Map_Labels_D.png",
+      "url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/KLT_Bin/Materials/Textures/FOF_Map_Labels_D.png",
+      "size": 6674448,
+      "sha256": "7ed4642ab31d970e22c7edf62508347c6fbb14bfdf47487696a6a9a681359f22"
+    },
+    {
+      "asset": "nvidia_klt",
+      "path": "assets/containers/nvidia_klt/Materials/Textures/FOF_Map_Magenta_Box_D.png",
+      "url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/KLT_Bin/Materials/Textures/FOF_Map_Magenta_Box_D.png",
+      "size": 8461312,
+      "sha256": "191e3e8f6b583dc35232f5079d18b421f97dd09d79b374b03b1b1745dd9d8477"
+    },
+    {
+      "asset": "nvidia_klt",
+      "path": "assets/containers/nvidia_klt/Materials/Textures/FOF_Mesh_Labels_D.png",
+      "url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/KLT_Bin/Materials/Textures/FOF_Mesh_Labels_D.png",
+      "size": 6674448,
+      "sha256": "7ed4642ab31d970e22c7edf62508347c6fbb14bfdf47487696a6a9a681359f22"
+    },
+    {
+      "asset": "nvidia_klt",
+      "path": "assets/containers/nvidia_klt/small_KLT.usd",
+      "url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/KLT_Bin/small_KLT.usd",
+      "size": 6650,
+      "sha256": "f2cd9e27013021bb4e0c1ce60c5705b7f05206c93a4859f9ae2dfa022fdaf83e"
+    },
+    {
+      "asset": "nvidia_klt",
+      "path": "assets/containers/nvidia_klt/small_KLT_visual.usd",
+      "url": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/KLT_Bin/small_KLT_visual.usd",
+      "size": 179929,
+      "sha256": "2810154bdae1532dea35603024a0fefd94eaf3909cecc5edbe09b6cb510e3a2b"
+    }
+  ]
+}

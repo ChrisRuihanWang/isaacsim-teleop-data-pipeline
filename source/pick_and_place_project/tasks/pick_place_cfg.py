@@ -1,3 +1,7 @@
+from pathlib import Path
+from dataclasses import fields
+import json
+
 from isaaclab.utils import configclass
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.scene import InteractiveSceneCfg
@@ -13,6 +17,18 @@ from isaaclab.managers import SceneEntityCfg
 from pick_and_place_project.tasks.mdp.actions import FrankaGripperActionCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.sensors import CameraCfg
+from pick_and_place_project.tasks.mdp.success import placed_on_target
+from pick_and_place_project.tasks.mdp.contact import ContactUsdFileCfg
+
+ASSET_ROOT = Path(__file__).resolve().parents[3] / "assets"
+for relative_path in ("fruits/geometry.json", "fruits/banana/asset.usda", "fruits/apple/asset.usda",
+                      "containers/nvidia_klt/small_KLT.usd"):
+    if not (ASSET_ROOT / relative_path).is_file():
+        raise FileNotFoundError(
+            f"Missing task asset: {relative_path}. Run python pp_scripts/fetch_task_assets.py "
+            "with the Isaac Sim Python environment before launching."
+        )
+FRUIT_GEOMETRY = json.loads((ASSET_ROOT / "fruits/geometry.json").read_text())
 
 
 from pick_and_place_project.tasks.mdp import observation as my_obs
@@ -22,6 +38,7 @@ from pick_and_place_project.tasks.mdp import observation as my_obs
 class TerminationsCfg:
     """Termination terms for the MDP."""
     time_out: DoneTerm = DoneTerm(func=mdp.time_out, time_out=True)
+    success: DoneTerm = DoneTerm(func=placed_on_target)
 
 
 @configclass
@@ -58,7 +75,7 @@ class ObservationsCfg:
             },
         )
 
-       
+
         gripper_width: ObsTerm = ObsTerm(
             func=my_obs.franka_gripper_width,
             params={
@@ -75,28 +92,31 @@ class ObservationsCfg:
 
     @configclass
     class ImagesCfg(ObsGroup):
-        
+
         rgb: ObsTerm = ObsTerm(
             func=mdp.image,
             params={
                 "sensor_cfg": SceneEntityCfg("camera"),
                 "data_type": "rgb",
+                "normalize": False,
             },
         )
-        
+
         wrist_rgb: ObsTerm = ObsTerm(
             func=mdp.image,
             params={
                 "sensor_cfg": SceneEntityCfg("wrist_camera"),
                 "data_type": "rgb",
+                "normalize": False,
             },
         )
-                
+
         oblique_rgb: ObsTerm = ObsTerm(
             func=mdp.image,
             params={
                 "sensor_cfg": SceneEntityCfg("oblique_camera"),
                 "data_type": "rgb",
+                "normalize": False,
             },
         )
         def __post_init__(self) -> None:
@@ -119,7 +139,12 @@ class CurriculumCfg:
 
 @configclass
 class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
-    decimation: int = 2
+    decimation: int = 4
+    grasp_offset_z: float = 0.097
+    finger_static_friction: float = 1.2
+    finger_dynamic_friction: float = 1.0
+    fruit_static_friction: float = 0.8
+    fruit_dynamic_friction: float = 0.6
     scene: SceneCfg = SceneCfg()
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
@@ -128,6 +153,8 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
+        self.sim.dt = 1.0 / 120.0
+        self.sim.render_interval = self.decimation
         self.commands = None
         self.rewards = None
 
@@ -137,11 +164,11 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
             spawn=sim_utils.GroundPlaneCfg(),
         )
 
-        
+
         self.scene.dome_light = AssetBaseCfg(
             prim_path="/World/Light",
             spawn=sim_utils.DomeLightCfg(
-                intensity=1000.0,     
+                intensity=1000.0,
                 color=(1.0, 1.0, 1.0),
             ),
         )
@@ -151,43 +178,57 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
             prim_path="{ENV_REGEX_NS}/Robot",
         )
 
-        # cube
-        cube_size = (0.04, 0.04, 0.04)
-        cube_z = cube_size[2] / 2.0 + 0.005
-        self.scene.cube_0 = RigidObjectCfg(
-            prim_path="{ENV_REGEX_NS}/Cube_0",
-            spawn=sim_utils.CuboidCfg(
-                size=cube_size,
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(),
-                mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
-                collision_props=sim_utils.CollisionPropertiesCfg(),
-                visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(1.0, 0.0, 0.0),
-                ),
+        # Apply finger-only material without modifying the shared upstream robot asset.
+        robot_spawn = self.scene.robot.spawn
+        self.scene.robot.spawn = ContactUsdFileCfg(
+            **{field.name: getattr(robot_spawn, field.name) for field in fields(robot_spawn) if field.name != "func"},
+            contact_material=sim_utils.RigidBodyMaterialCfg(
+                static_friction=self.finger_static_friction, dynamic_friction=self.finger_dynamic_friction,
+                restitution=0.0, friction_combine_mode="average",
             ),
-            init_state=RigidObjectCfg.InitialStateCfg(
-                pos=(0.5, 0.0, cube_z),
-                rot=(0.0, 0.0, 0.0, 1.0),
-            ),
+            contact_body_paths=("panda_leftfinger", "panda_rightfinger"),
+        )
+        self.scene.robot.spawn.articulation_props.solver_position_iteration_count = 12
+        self.scene.robot.spawn.articulation_props.solver_velocity_iteration_count = 4
+        self.scene.robot.spawn.collision_props = sim_utils.CollisionPropertiesCfg(
+            contact_offset=0.002, rest_offset=0.0
         )
 
-        # basket
-        basket_size = (0.25, 0.25, 0.10)
-        basket_z = basket_size[2] / 2.0
+        # Local textured fruit assets contain centered geometry and convex collision meshes.
+        for name, xy in (("banana", (0.45, -0.18)), ("apple", (0.50, 0.17))):
+            geometry = FRUIT_GEOMETRY[name]
+            setattr(self.scene, name, RigidObjectCfg(
+                prim_path="{ENV_REGEX_NS}/" + name.capitalize(),
+                spawn=ContactUsdFileCfg(
+                    usd_path=str(ASSET_ROOT / "fruits" / name / "asset.usda"),
+                    contact_material=sim_utils.RigidBodyMaterialCfg(
+                        static_friction=self.fruit_static_friction, dynamic_friction=self.fruit_dynamic_friction,
+                        restitution=0.0, friction_combine_mode="average",
+                    ),
+                    rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                        solver_position_iteration_count=8,
+                        solver_velocity_iteration_count=4,
+                        angular_damping=0.5,
+                        max_depenetration_velocity=1.0,
+                    ),
+                    collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.002, rest_offset=0.0),
+                ),
+                init_state=RigidObjectCfg.InitialStateCfg(
+                    pos=(*xy, geometry["half_extents_m"][2] + 0.005),
+                    rot=(1.0, 0.0, 0.0, 0.0),
+                ),
+            ))
+
+        # Retain the asset name basket for task code; the KLT has an open cavity.
         self.scene.basket = RigidObjectCfg(
             prim_path="{ENV_REGEX_NS}/Basket",
-            spawn=sim_utils.CuboidCfg(
-                size=basket_size,
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(),
-                mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
-                collision_props=sim_utils.CollisionPropertiesCfg(),
-                visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(0.2, 0.2, 1.0),
-                ),
+            spawn=sim_utils.UsdFileCfg(
+                usd_path=str(ASSET_ROOT / "containers/nvidia_klt/small_KLT.usd"),
+                rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
+                collision_props=sim_utils.CollisionPropertiesCfg(contact_offset=0.002, rest_offset=0.0),
             ),
             init_state=RigidObjectCfg.InitialStateCfg(
-                pos=(0.75, 0.0, basket_z),
-                rot=(0.0, 0.0, 0.0, 1.0),
+                pos=(0.75, 0.0, 0.074), rot=(1.0, 0.0, 0.0, 0.0),
             ),
         )
 
@@ -203,7 +244,7 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
             ),
             scale=1.0,
             body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(
-                pos=[0.0, 0.0, 0.107],
+                pos=[0.0, 0.0, self.grasp_offset_z],
             ),
         )
 
@@ -214,8 +255,7 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
             close_pos=0.0,
         )
 
-       
-        sim_utils.create_prim("/World/OverheadCameraBase", "Xform")
+
         self.scene.camera = CameraCfg(
             prim_path="{ENV_REGEX_NS}/OverheadCamera",
             update_period=0,
@@ -230,12 +270,12 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
             ),
             offset=CameraCfg.OffsetCfg(
                 pos=(0.6, 0.0, 1.2),
-                rot=(0.0, 1.0, 0.0, 0.0),  
+                rot=(0.0, 1.0, 0.0, 0.0),
                 convention="ros",
             ),
         )
 
-       
+
         self.scene.wrist_camera = CameraCfg(
             prim_path="{ENV_REGEX_NS}/Robot/panda_hand/wrist_cam",
             update_period=0,
@@ -249,13 +289,12 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
                 clipping_range=(0.01, 10.0),
             ),
             offset=CameraCfg.OffsetCfg(
-                pos=(0.05, 0.00, 0.08),          
-                rot=(0.0, 0.0, 0.0, 1.0),         
+                pos=(0.05, 0.00, 0.08),
+                rot=(1.0, 0.0, 0.0, 0.0),
                 convention="ros",
             ),
         )
-        
-        sim_utils.create_prim("/World/ObliqueCameraBase", "Xform")
+
         self.scene.oblique_camera = CameraCfg(
             prim_path="{ENV_REGEX_NS}/ObliqueCamera",
             update_period=0,
@@ -269,19 +308,12 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
                 clipping_range=(0.1, 100.0),
             ),
             offset=CameraCfg.OffsetCfg(
-                pos=(0.9, 0.8, 0.1),
-                rot=(-0.11732, 0.12803, 0.66533, -0.72608),
+                pos=(1.05, 0.8, 0.65),
+                rot=(-0.12057844, 0.22287456, 0.85082512, -0.46030901),
                 convention="ros",
             ),
         )
-        print("==== DEBUG ACTION TERMS ====")
-        for name, term_cfg in self.actions.__dict__.items():
-            if term_cfg is None:
-                print(name, "=> None")
-                continue
-            ct = getattr(term_cfg, "class_type", "<no class_type>")
-            print(name, "=>", type(term_cfg), "class_type:", ct)
-        print("==== END DEBUG ACTION TERMS ====")
+
 
 
 @configclass

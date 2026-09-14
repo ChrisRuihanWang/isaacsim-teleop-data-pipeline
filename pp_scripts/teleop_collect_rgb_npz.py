@@ -1,28 +1,43 @@
-from isaaclab.app import AppLauncher
 import numpy as np
-import torch
 from pathlib import Path
-from pynput import keyboard
+from queue import SimpleQueue
+import argparse
+import time
+import json
+
+try:
+    from .dataset_schema import STATE_NAMES, ACTION_NAMES, validate_episode
+except ImportError:
+    from dataset_schema import STATE_NAMES, ACTION_NAMES, validate_episode
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Collect fruit-v1 RGB demonstrations")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--save-dir", type=Path, default=Path(__file__).resolve().parents[1] / "data/teleop_fruit_v1")
+    parser.add_argument("--translation-step", type=float, default=0.005, help="TCP translation command per control step, metres")
+    parser.add_argument("--rotation-step", type=float, default=0.03, help="TCP rotation command per control step, radians")
+    parser.add_argument("--gripper-rate", type=float, default=1.5, help="Normalized gripper command change per simulation second")
+    args = parser.parse_args()
+    if min(args.translation_step, args.rotation_step, args.gripper_rate) <= 0:
+        parser.error("Control step sizes and gripper rate must be positive")
+    from isaaclab.app import AppLauncher
+    import torch
+    from pynput import keyboard
+
     # ---- App ----
     app = AppLauncher(headless=False, enable_cameras=True).app
 
     # ---- Env ----
-    try:
-        from pick_and_place_project.tasks.pick_place_gr1t2_pi import make_env
-        env = make_env()
-    except Exception as e:
-        print("[WARN] import make_env failed:", repr(e))
-        from pick_and_place_project.tasks.pick_place_gr1t2_pi import PickPlaceGR1T2PiEnv, PickPlaceGR1T2PiEnvCfg
-        env = PickPlaceGR1T2PiEnv(PickPlaceGR1T2PiEnvCfg())
+    from pick_and_place_project.tasks.pick_place_gr1t2_pi import make_env
+    env = make_env()
 
     # ---- Reset + warm-up ----
-    obs, info = env.reset()
+    obs, info = env.reset(seed=args.seed)
     for _ in range(10):
         app.update()
     a0 = torch.zeros((env.num_envs, 7), device=env.device, dtype=torch.float32)
+    a0[:, -1] = -1.0
     obs, *_ = env.step(a0)
 
     device = env.device
@@ -37,8 +52,7 @@ def main():
     import re
     from datetime import datetime
 
-    SCRIPT_DIR = Path(__file__).resolve().parent
-    save_dir = (SCRIPT_DIR / "../data/teleop2").resolve()
+    save_dir = args.save_dir.expanduser().resolve()
     save_dir.mkdir(parents=True, exist_ok=True)
 
     debug_dir = (save_dir / "debug_images").resolve()
@@ -71,6 +85,8 @@ def main():
     pressed = set()
     recording = False
     pending_reset = False
+    commands = SimpleQueue()
+    quit_requested = False
 
     episode_state = []
     episode_rgb_raw = []
@@ -79,12 +95,12 @@ def main():
     episode_action = []
 
     # scales
-    dpos = 0.03
-    drot = 0.20
+    dpos = args.translation_step
+    drot = args.rotation_step
 
     # continuous gripper command in [-1, +1]
     grip_cmd = -1.0
-    grip_rate = 2.5  # per second
+    grip_rate = args.gripper_rate  # per second
 
     def key_to_str(k):
         try:
@@ -95,6 +111,8 @@ def main():
    
     def _raw_to_view_u8(x_raw: np.ndarray) -> np.ndarray:
         """Robustly make raw float image viewable as uint8 for debugging."""
+        if x_raw.dtype == np.uint8:
+            return x_raw.copy()
         x = x_raw.astype(np.float32)
         x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
         mn, mx = float(x.min()), float(x.max())
@@ -163,7 +181,7 @@ def main():
             print(f"[DEBUG] saved {ob_path.name}  raw[min,max,std]=({ob.min():.4f},{ob.max():.4f},{ob.std():.4f})")
 
     # ---------- episode save ----------
-    def save_episode(current_ep_id: int) -> int:
+    def save_episode(current_ep_id: int, reason="manual", success=False) -> int:
         nonlocal episode_state, episode_rgb_raw, episode_wrist_raw, episode_action
 
         lens = {
@@ -173,7 +191,9 @@ def main():
             "oblique_rgb_raw": len(episode_oblique_raw),
             "action": len(episode_action),
         }
-        T = min(lens.values())
+        if len(set(lens.values())) != 1:
+            raise ValueError(f"Refusing to save misaligned episode: {lens}")
+        T = lens["state"]
         if T <= 5:
             print("[SAVE] skipped (too short / not aligned)", lens)
             episode_state.clear()
@@ -183,28 +203,45 @@ def main():
             episode_action.clear()
             return current_ep_id
 
-        if len(set(lens.values())) != 1:
-            print("[WARN] length mismatch:", lens, "-> trunc to T=", T)
-
         path = safe_episode_path(save_dir, current_ep_id)
 
         out = {
             "state": np.stack(episode_state[:T], axis=0).astype(np.float32),
-            "rgb_raw": np.stack(episode_rgb_raw[:T], axis=0).astype(np.float32),
-            "wrist_rgb_raw": np.stack(episode_wrist_raw[:T], axis=0).astype(np.float32),
-            "oblique_rgb_raw": np.stack(episode_oblique_raw[:T], axis=0).astype(np.float32),
+            "rgb_raw": np.stack(episode_rgb_raw[:T], axis=0).astype(np.uint8),
+            "wrist_rgb_raw": np.stack(episode_wrist_raw[:T], axis=0).astype(np.uint8),
+            "oblique_rgb_raw": np.stack(episode_oblique_raw[:T], axis=0).astype(np.uint8),
             "action": np.stack(episode_action[:T], axis=0).astype(np.float32),
-            "meta": np.array([{
+            "timestamp": np.arange(T, dtype=np.float64) * float(env.step_dt),
+            "metadata_json": np.array(json.dumps({
+                "schema_version": 1,
+                "episode_id": int(path.stem.split("_")[1]),
+                "state_names": STATE_NAMES,
+                "action_names": ACTION_NAMES,
+                "action_frame": "robot_base",
+                "alignment": "observation_before_action",
+                "timestamp_clock": "simulation_seconds_from_recording_start",
+                "translation_step_m": args.translation_step,
+                "rotation_step_rad": args.rotation_step,
+                "gripper_rate_per_second": args.gripper_rate,
                 "saved_at": datetime.now().isoformat(timespec="seconds"),
                 "T": int(T),
-                "dt": float(getattr(env, "dt", 0.0) or 0.0),
+                "dt": float(env.step_dt),
                 "cfg_class": type(env.cfg).__name__,
                 "cfg_module": type(env.cfg).__module__,
-                "note": "teleop2_raw_only",
-            }], dtype=object),
+                "note": "fruit_v1_rgb_uint8_range",
+                "task": "Place the banana and the apple into the open bin.",
+                "image_range": [0, 255],
+                "end_reason": reason,
+                "success": bool(success),
+                "seed": args.seed,
+            })),
         }
 
-        np.savez_compressed(path, **out)
+        validate_episode(out)
+        temporary = path.with_suffix(".npz.tmp")
+        with temporary.open("xb") as stream:
+            np.savez_compressed(stream, **out)
+        temporary.replace(path)
         print(f"[SAVE] {path.name}  T={T}  keys={list(out.keys())}")
 
         episode_state.clear()
@@ -221,30 +258,13 @@ def main():
 
     # ---------- keyboard callbacks ----------
     def on_press(k):
-        nonlocal recording, ep_id, pending_reset, obs
         s = key_to_str(k)
+        if s in pressed:
+            return
         pressed.add(s)
-
-        if s == "r":
-            recording = not recording
-            print(f"[REC] {'ON' if recording else 'OFF'}")
-            if not recording:
-                ep_id = save_episode(ep_id)
-
-        if s == "m":
-            pending_reset = True
-            print("[RESET REQUESTED]")
-
-        if s == "n":
-            save_debug_images(obs)
-
-        if s == "v":
-            print("gripper: HOLD V -> CLOSE (continuous)")
-        if s == "b":
-            print("gripper: HOLD B -> OPEN  (continuous)")
-
+        if s in ("r", "m", "n", "Key.esc"):
+            commands.put(s)
         if s == "Key.esc":
-            print("[QUIT]")
             return False
 
     def on_release(k):
@@ -254,13 +274,33 @@ def main():
     listener = keyboard.Listener(on_press=on_press, on_release=on_release)
     listener.start()
     print("listener started")
+    print("Motion: W/S=X | A/D=Y | Q/E=Z | I/K=Rx | J/L=Ry | U/O=Rz")
     print("Controls: R=record toggle | N=save debug PNGs | M=reset | V/B=gripper close/open | ESC=quit")
 
     # ---------- main loop ----------
     try:
-        while app.is_running():
+        while app.is_running() and not quit_requested:
+            loop_started = time.perf_counter()
+            while not commands.empty():
+                command = commands.get()
+                if command == "r":
+                    recording = not recording
+                    if not recording:
+                        ep_id = save_episode(ep_id)
+                    print(f"[REC] {'ON' if recording else 'OFF'}")
+                elif command == "m":
+                    pending_reset = True
+                elif command == "n":
+                    save_debug_images(obs)
+                elif command == "Key.esc":
+                    quit_requested = True
+            if quit_requested:
+                break
             if pending_reset:
                 pending_reset = False
+                ep_id = save_episode(ep_id, reason="manual_reset")
+                recording = False
+                grip_cmd = -1.0
                 print("[RESET] main thread")
                 obs, info = env.reset()
                 pressed.clear()
@@ -269,7 +309,7 @@ def main():
                 continue
 
             # continuous gripper update
-            dt = float(getattr(env, "dt", 1 / 60) or (1 / 60))
+            dt = float(env.step_dt)
             if ("v" in pressed) and ("b" not in pressed):
                 grip_cmd = min(1.0, grip_cmd + grip_rate * dt)
             elif ("b" in pressed) and ("v" not in pressed):
@@ -295,54 +335,39 @@ def main():
             if "o" in pressed: a[0, 5] -= drot
 
             a[0, 6] = float(grip_cmd)
-            # step
-            obs2, rew, done, trunc, info = env.step(a)
 
             # record (store obs BEFORE step)
             if recording:
                 # state
                 episode_state.append(obs["policy"].detach().cpu().numpy()[0].astype(np.float32, copy=True))
 
-                # overhead raw float
-                oh = obs["images"]["rgb"].detach().cpu().numpy()[0].astype(np.float32, copy=True)
+                # Preserve sensor RGB bytes without normalization or color stretching.
+                oh = obs["images"]["rgb"].detach().cpu().numpy()[0].copy()
                 episode_rgb_raw.append(oh)
 
-                # wrist raw float (must exist in your config)
-                if "wrist_rgb" in obs["images"]:
-                    w = obs["images"]["wrist_rgb"].detach().cpu().numpy()[0].astype(np.float32, copy=True)
-                else:
-                    # fallback: keep alignment
-                    if len(episode_wrist_raw) > 0:
-                        w = episode_wrist_raw[-1]
-                    else:
-                        # last-resort blank raw
-                        w = np.zeros_like(oh, dtype=np.float32)
-                episode_wrist_raw.append(w)
-
-                # ✅ oblique raw float              
-                if "oblique_rgb" in obs["images"]:
-                    ob = obs["images"]["oblique_rgb"].detach().cpu().numpy()[0].astype(np.float32, copy=True)
-                else:
-                    if len(episode_oblique_raw) > 0:
-                        ob = episode_oblique_raw[-1]
-                    else:
-                        ob = np.zeros_like(oh, dtype=np.float32)
-                episode_oblique_raw.append(ob)
+                episode_wrist_raw.append(obs["images"]["wrist_rgb"][0].detach().cpu().numpy().copy())
+                episode_oblique_raw.append(obs["images"]["oblique_rgb"][0].detach().cpu().numpy().copy())
 
                 # action
                 episode_action.append(a.detach().cpu().numpy()[0].astype(np.float32, copy=True))
 
+            obs2, rew, done, trunc, info = env.step(a)
+            if bool(done.any() or trunc.any()):
+                success = bool(info["success"].any())
+                ep_id = save_episode(ep_id, reason="success" if success else "timeout", success=success)
+                recording = False
+                grip_cmd = -1.0
+                pressed.clear()
             obs = obs2
+            # Keep keyboard input at at most the simulation control frequency.
+            time.sleep(max(0.0, env.step_dt - (time.perf_counter() - loop_started)))
 
     finally:
         listener.stop()
+        save_episode(ep_id, reason="exit")
         env.close()
         app.close()
 
 
 if __name__ == "__main__":
-    import traceback
-    try:
-        main()
-    except Exception:
-        traceback.print_exc()
+    main()
