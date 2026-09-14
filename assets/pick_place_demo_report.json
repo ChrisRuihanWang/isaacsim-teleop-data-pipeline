@@ -1,0 +1,90 @@
+{
+  "passed": true,
+  "controller": "scripted_tcp_waypoints",
+  "seed": 42,
+  "task": "Place the apple into the open bin.",
+  "phases": [
+    {
+      "phase": "settle",
+      "end_time": 3.7333333333333334,
+      "tcp_error_m": 0.0026343564968556166
+    },
+    {
+      "phase": "approach",
+      "end_time": 13.733333333333333,
+      "tcp_error_m": 1.2362086636130698e-05
+    },
+    {
+      "phase": "descend",
+      "end_time": 20.2,
+      "tcp_error_m": 0.002534270053729415
+    },
+    {
+      "phase": "grasp",
+      "end_time": 23.2,
+      "tcp_error_m": 0.0027999491430819035
+    },
+    {
+      "phase": "lift",
+      "end_time": 31.166666666666668,
+      "tcp_error_m": 0.0029012507293373346
+    },
+    {
+      "phase": "transfer to bin",
+      "end_time": 39.03333333333333,
+      "tcp_error_m": 0.002876884303987026
+    },
+    {
+      "phase": "lower into bin",
+      "end_time": 42.6,
+      "tcp_error_m": 0.0021540066227316856
+    },
+    {
+      "phase": "retract",
+      "end_time": 49.666666666666664,
+      "tcp_error_m": 0.002664988860487938
+    }
+  ],
+  "lift_m": 0.24996177665889263,
+  "apple_bounds_in_bin": [
+    [
+      -0.03558636084198952,
+      -0.046132028102874756,
+      -0.0743120014667511
+    ],
+    [
+      0.029485460370779037,
+      0.0176965594291687,
+      -0.016425669193267822
+    ]
+  ],
+  "stable_placement_steps": 90,
+  "frames": 1580,
+  "simulation_seconds": 52.666666666666664,
+  "control_fps": 30.0,
+  "recorded_on": "2026-09-14",
+  "simulator": "Isaac Sim 5.1.0 / Isaac Lab 2.3.0",
+  "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU (8 GB)",
+  "script": "pp_scripts/record_pick_place_demo.py",
+  "gif_speed": 3.0,
+  "video_fps": 15,
+  "camera_shapes": {
+    "overhead": [
+      256,
+      256,
+      3
+    ],
+    "wrist": [
+      256,
+      256,
+      3
+    ],
+    "oblique": [
+      480,
+      640,
+      3
+    ]
+  },
+  "gif_sha256": "0e59c9f20ede9d25e0d6078c349ba947b65c89c2c72b568dcceebc347ca8ebfb",
+  "script_sha256": "bec2bb7e6e1ce1591ae419a388139195d99b66a57bf1f1ad6c17a931d44847c6"
+}
